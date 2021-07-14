@@ -1,7 +1,7 @@
 #pragma once
 typedef unsigned char bit8_t;
 typedef unsigned short bit16_t;
-typedef unsigned long bit32_t;
+typedef unsigned int bit32_t;
 typedef unsigned long long bit64_t;
 
 /*
@@ -20,6 +20,7 @@ typedef struct ethernet_header {
 /*
     IP 헤더
 */
+
 #define IP4_ADDR_LEN 4
 #define IP6_ADDR_LEN 8
 
@@ -43,14 +44,7 @@ typedef struct ipv4_header {
 }ip4_hdr;
 
 typedef struct ipv6_header {
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-    bit8_t ip6_tclass; // 우선순위
-    bit8_t ip6_ver : 4; // 버전
-#elif __BYTE_ORDER == __BIG_ENDIAN
-    bit8_t ip6_ver : 4; // 버전
-    bit8_t ip6_tclass; // 우선순위
-#endif
-    bit32_t ip6_flow_lbl : 20; // 흐름 처리
+    bit32_t ip6_flow; /*4bit 버전, 8비트 트래픽 클래스, 20비트 플로우 라벨*/
     bit16_t ip6_pay_len; // 페이로드 길이
     bit8_t ip6_next; // 다음 헤더
     bit8_t ip6_hop_limit; // ipv6 TTL
@@ -96,7 +90,6 @@ typedef struct igmp_header { // TODO
     bit8_t igmp_group_ip[IP4_ADDR_LEN];
 }igmp_hdr;
 
-
 /*
     TCP, UDP 헤더
 */
@@ -104,25 +97,27 @@ typedef struct igmp_header { // TODO
 typedef struct tcp_header { 
     bit16_t tcp_src_port; // 출발지 포트
     bit16_t tcp_dst_port; // 도착지 포트
-    bit32_t tcp_seq; // 순서 번호
-    bit32_t tcp_ack; // 승인 번호
+    bit32_t tcp_seq; // 순서
+    bit32_t tcp_seq_ack; // 승인
 #if __BYTE_ORDER == __LITTLE_ENDIAN
-    bit8_t tcp_rsvd : 6; // 사용 하지 않음
-    bit8_t tcp_hlen : 4; // 데이터 오프셋
+    bit8_t tcp_rsvd: 4;
+    bit8_t tcp_offset: 4;
 #elif __BYTE_ORDER == __BIG_ENDIAN
-    bit8_t tcp_hlen : 4; // 데이터 오프셋
-    bit8_t tcp_rsvd : 6; // 사용 하지 않음
+    bit8_t tcp_offset: 4;
+    bit8_t tcp_rsvd: 4;
 #endif
-    bit8_t tcp_flags : 6; // 2비트 예비 + 플래그
-    #define TCP_FIN 0x01 // 0b00000001
-    #define TCP_SYN 0X02 // 0b00000010
-    #define TCP_RST 0X04 // 0b00000100
-    #define TCP_PSH 0X08 // 0b00001000
-    #define TCP_ACK 0X10 // 0b00010000
-    #define TCP_URG 0X20 // 0b00100000
+    bit8_t tcp_flags;
+#define TCP_FIN 0X01
+#define TCP_SYN 0x02
+#define TCP_RST 0x04
+#define TCP_PUSH 0x08
+#define TCP_ACK 0x10
+#define TCP_URG 0x20
+#define TCP_ECE 0x40
+#define TCP_CWR 0x80
     bit16_t tcp_window; // 윈도우 사이즈
-    bit16_t tcp_checksum; // TCP 체크섬
-    bit16_t tcp_urgent; // 긴급 포인터
+    bit16_t tcp_checksum; //체크섬
+    bit16_t tcp_urgptr; // 긴급포인터
 }tcp_hdr;
 
 typedef struct udp_header { 

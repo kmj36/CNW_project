@@ -72,23 +72,14 @@ typedef struct arp_header {
 }arp_hdr;
 
 /*
-    ICMP, IGMP 헤더
+    ICMP 헤더
 */
 
-typedef struct icmp_header { // TODO
+typedef struct icmp_header {
     bit8_t icmp_type; // ICMP 타입
     bit8_t icmp_code; // 코드
     bit16_t icmp_checksum; // 체크섬
-    bit8_t icmp_msg[4]; // 예약(순서번호, 인터넷 주소 등)
-    bit32_t icmp_data; // 데이터
-}icmphdr;
-
-typedef struct igmp_header { // TODO
-    bit8_t igmp_type;
-    bit8_t igmp_code;
-    bit16_t igmp_checksum;
-    bit8_t igmp_group_ip[IP4_ADDR_LEN];
-}igmp_hdr;
+}icmp_hdr;
 
 /*
     TCP, UDP 헤더

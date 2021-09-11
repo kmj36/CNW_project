@@ -2,9 +2,12 @@
 
 The new linux C-language NIDS
 
+# Required Libraries
 
+필요 라이브러리: libpcap
+컴파일: gcc -o CNW_IDS CNW_IDS.c packetElements.c -l pcap
 
-# Beta v1.0
+# Beta v1.1
 
 빌드: ./make.sh
 

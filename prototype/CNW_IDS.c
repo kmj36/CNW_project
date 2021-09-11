@@ -76,7 +76,7 @@ void main(int argc, char *argv[])
         fprintf(stderr, "The rules file \"rule.ini\" does not exist.");
         exit(-1);
     }
-    
+
     handle = pcap_open_live(argv[1], MAX_PACKET_SIZE, 0, 0, errbuf);
     packetcount = initcount_m();
     rulecount = initcount_m();
@@ -88,7 +88,7 @@ void main(int argc, char *argv[])
         pcapfatal("pcap_open_live", errbuf);
         exit(-1);
     }
-    
+
     act.sa_handler = sig_handler;
     sigfillset(&(act.sa_mask));
     sigaction(SIGINT, &act, NULL);
@@ -96,6 +96,407 @@ void main(int argc, char *argv[])
     printmotd(argv[1]);
 
     pcap_loop(handle, -1, callback_packet, errbuf);
+}
+
+void pcapfatal(const char *inerr, const char *errbuf)
+{
+    fprintf(stderr, "Fatal error in %s : %s\n", inerr, errbuf);
+    exit(-1);
+}
+
+count_s *initcount_m()
+{
+    count_s *temp = malloc(sizeof(count_s));
+    temp->icmp = temp->ipv4 = temp->ipv6 = temp->tcp = temp->udp = 0;
+    return temp;
+}
+
+rule **readinirule_m(int fd) // 버그 없음
+{
+    rule **result;
+    int rulesize = lseek(fd, 0, SEEK_END);
+    char *rulestr = malloc(sizeof(char) * rulesize), *temp;
+
+    lseek(fd, 0, SEEK_SET);
+    read(fd, rulestr, rulesize);
+
+    temp = strtok(rulestr, " >\n");
+
+    if (strcmp(temp, "---") == 0)
+    {
+        fprintf(stderr, "Fatal error in strtok() : No rules\n");
+        exit(-1);
+    }
+    else
+        result = malloc(sizeof(rule *));
+
+    while (1)
+    {
+        result[count] = malloc(sizeof(rule));
+        result[count]->ignore = 0;
+
+        result[count]->ipver = malloc(strlen(temp)); // ip 버전
+        strcpy(result[count]->ipver, temp);
+
+        if (strcmp(result[count]->ipver, "any") == 0)
+            result[count]->ignore |= 1;
+
+        temp = strtok(NULL, " >\n");
+
+        result[count]->ptc = malloc(strlen(temp)); // 프로토콜
+        strcpy(result[count]->ptc, temp);
+
+        if (strcmp(result[count]->ptc, "any") == 0)
+            result[count]->ignore |= 2;
+
+        temp = strtok(NULL, " >\n");
+
+        result[count]->srcip = malloc(strlen(temp)); // 출발지 ip
+        strcpy(result[count]->srcip, temp);
+
+        if (strcmp(result[count]->srcip, "0.0.0.0") == 0 || strcmp(result[count]->srcip, "::") == 0)
+            result[count]->ignore |= 4;
+
+        temp = strtok(NULL, " >\n");
+
+        result[count]->srcport = malloc(strlen(temp)); // 출발지 포트
+        strcpy(result[count]->srcport, temp);
+
+        if (strcmp(result[count]->srcport, "0") == 0)
+            result[count]->ignore |= 8;
+
+        temp = strtok(NULL, " >\n");
+
+        result[count]->dstip = malloc(strlen(temp)); // 도착지 ip
+        strcpy(result[count]->dstip, temp);
+
+        if (strcmp(result[count]->dstip, "0.0.0.0") == 0 || strcmp(result[count]->dstip, "::") == 0)
+            result[count]->ignore |= 16;
+
+        temp = strtok(NULL, " >\n");
+
+        result[count]->dstport = malloc(strlen(temp)); // 도착지 포트
+        strcpy(result[count]->dstport, temp);
+
+        if (strcmp(result[count]->dstport, "0") == 0)
+            result[count]->ignore |= 32;
+
+        temp = strtok(NULL, " >\n");
+
+        if (strcmp(temp, "---") == 0 || temp == NULL)
+            break;
+        else
+        {
+            count++;
+            result = realloc(result, sizeof(rule *) * (count + 1));
+        }
+    }
+
+    count++;
+    free(rulestr);
+    rulestr = NULL;
+
+    close(fd);
+    return result;
+}
+
+void callback_packet(bit8_t *args, const struct pcap_pkthdr *header, const bit8_t *packet)
+{
+    bit16_t flags = analyze(packet);
+    checkrule(flags);
+}
+
+bit8_t analyze(const bit8_t *packet)
+{
+    bit8_t flags = 0;
+    pheaders->eth = (const eth_hdr *)packet;
+    if (e_ntohs(pheaders->eth->eth_type) == 0x0806)
+    {
+        pheaders->arph = (const arp_hdr *)(sizeof(eth_hdr) + packet);
+        flags |= 1;
+        packetcount->arp++;
+    }
+    else if (e_ntohs(pheaders->eth->eth_type) == 0x0800)
+    {
+        pheaders->ip4h = (const ip4_hdr *)(sizeof(eth_hdr) + packet);
+        packetcount->ipv4++;
+        if (pheaders->ip4h->ip4_protocol == 1)
+        {
+            pheaders->icmph = (const icmp_hdr *)(sizeof(eth_hdr) + (pheaders->ip4h->ip4_hdrlen * 4) + packet);
+            flags |= 2;
+            packetcount->icmp++;
+        }
+        else if (pheaders->ip4h->ip4_protocol == 6)
+        {
+            pheaders->tcph = (const tcp_hdr *)(sizeof(eth_hdr) + (pheaders->ip4h->ip4_hdrlen * 4) + packet);
+            flags |= 4;
+            packetcount->tcp++;
+        }
+        else if (pheaders->ip4h->ip4_protocol == 17)
+        {
+            pheaders->udph = (const udp_hdr *)(sizeof(eth_hdr) + (pheaders->ip4h->ip4_hdrlen * 4) + packet);
+            flags |= 8;
+            packetcount->udp++;
+        }
+    }
+    else if (e_ntohs(pheaders->eth->eth_type) == 0x86dd)
+    {
+        pheaders->ip6h = (const ip6_hdr *)(sizeof(eth_hdr) + packet);
+        packetcount->ipv6++;
+        if (pheaders->ip6h->ip6_next == 58)
+        {
+            pheaders->icmph = (const icmp_hdr *)(sizeof(eth_hdr) + sizeof(ip6_hdr) + packet);
+            flags |= 16;
+            packetcount->icmp++;
+        }
+        else if (pheaders->ip6h->ip6_next == 6)
+        {
+            pheaders->tcph = (const tcp_hdr *)(sizeof(eth_hdr) + sizeof(ip6_hdr) + packet);
+            flags |= 32;
+            packetcount->tcp++;
+        }
+        else if (pheaders->ip6h->ip6_next == 17)
+        {
+            pheaders->udph = (const udp_hdr *)(sizeof(eth_hdr) + sizeof(ip6_hdr) + packet);
+            flags |= 64;
+            packetcount->udp++;
+        }
+    }
+    return flags;
+}
+
+void checkrule(bit8_t flags) //0BBB BBBB 예약 iph6udp iph6tcp iph6icmp ip4hudp ip4htcp ip4hicmp arp
+{
+    int i, ismatched = 0;
+    switch (flags)
+    {
+    case 1: // arp
+        for (i = 0; i < count; i++)
+        {
+            if (strcmp(readrules[i]->ptc, "arp") && !(readrules[i]->ignore & 2)) // 0 이그노어 비트가 true인 경우 통과 경우: 1 무시 AND true=1인 경우
+                continue;
+            if (strcmp(readrules[i]->srcip, strip4(pheaders->arph->arp_src_ip)) && !(readrules[i]->ignore & 4))
+                continue;
+            if (strcmp(readrules[i]->dstip, strip4(pheaders->arph->arp_dst_ip)) && !(readrules[i]->ignore & 16))
+                continue;
+            rulecount->arp++;
+            ismatched = 1;
+            break;
+        }
+        if (ismatched)
+        {
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
+            print_eth();
+            print_arp();
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
+        }
+        break;
+    case 2: // icmpv4
+        for (i = 0; i < count; i++)
+        {
+            if (strcmp(readrules[i]->ipver, "ipv4") && !(readrules[i]->ignore & 1))
+                continue;
+            if (strcmp(readrules[i]->ptc, "icmp") && !(readrules[i]->ignore & 2))
+                continue;
+            if (strcmp(readrules[i]->srcip, strip4(pheaders->ip4h->ip4_src_ip)) && !(readrules[i]->ignore & 4))
+                continue;
+            if (strcmp(readrules[i]->dstip, strip4(pheaders->ip4h->ip4_dst_ip)) && !(readrules[i]->ignore & 16))
+                continue;
+            rulecount->ipv4++;
+            rulecount->icmp++;
+            ismatched = 1;
+            break;
+        }
+        if (ismatched)
+        {
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
+            print_eth();
+            print_ipv4();
+            print_icmp();
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
+        }
+        break;
+    case 4: // tcpv4
+        for (i = 0; i < count; i++)
+        {
+            if (strcmp(readrules[i]->ipver, "ipv4") && !(readrules[i]->ignore & 1))
+                continue;
+            if (strcmp(readrules[i]->ptc, "tcp") && !(readrules[i]->ignore & 2))
+                continue;
+            if (strcmp(readrules[i]->srcip, strip4(pheaders->ip4h->ip4_src_ip)) && !(readrules[i]->ignore & 4))
+                continue;
+            if ((atoi(readrules[i]->srcport) != e_ntohs(pheaders->tcph->tcp_src_port)) && !(readrules[i]->ignore & 8))
+                continue;
+            if (strcmp(readrules[i]->dstip, strip4(pheaders->ip4h->ip4_dst_ip)) && !(readrules[i]->ignore & 16))
+                continue;
+            if ((atoi(readrules[i]->dstport) != e_ntohs(pheaders->tcph->tcp_dst_port)) && !(readrules[i]->ignore & 32))
+                continue;
+            rulecount->ipv4++;
+            rulecount->tcp++;
+            ismatched = 1;
+            break;
+        }
+        if (ismatched)
+        {
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
+            print_eth();
+            print_ipv4();
+            print_tcp();
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
+        }
+        break;
+    case 8: // udpv4
+        for (i = 0; i < count; i++)
+        {
+            if (strcmp(readrules[i]->ipver, "ipv4") && !(readrules[i]->ignore & 1))
+                continue;
+            if (strcmp(readrules[i]->ptc, "udp") && !(readrules[i]->ignore & 2))
+                continue;
+            if (strcmp(readrules[i]->srcip, strip4(pheaders->ip4h->ip4_src_ip)) && !(readrules[i]->ignore & 4))
+                continue;
+            if ((atoi(readrules[i]->srcport) != e_ntohs(pheaders->udph->udp_src_port)) && !(readrules[i]->ignore & 8))
+                continue;
+            if (strcmp(readrules[i]->dstip, strip4(pheaders->ip4h->ip4_dst_ip)) && !(readrules[i]->ignore & 16))
+                continue;
+            if ((atoi(readrules[i]->dstport) != e_ntohs(pheaders->udph->udp_dst_port)) && !(readrules[i]->ignore & 32))
+                continue;
+            rulecount->ipv4++;
+            rulecount->udp++;
+            ismatched = 1;
+            break;
+        }
+        if (ismatched)
+        {
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
+            print_eth();
+            print_ipv4();
+            print_udp();
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
+        }
+        break;
+    case 16: // icmpv6
+        for (i = 0; i < count; i++)
+        {
+            if (strcmp(readrules[i]->ipver, "ipv6") && !(readrules[i]->ignore & 1))
+                continue;
+            if (strcmp(readrules[i]->ptc, "icmp") && !(readrules[i]->ignore & 2))
+                continue;
+            if (strcmp(readrules[i]->srcip, strip6(pheaders->ip6h->ip6_src_ip)) && !(readrules[i]->ignore & 4))
+                continue;
+            if (strcmp(readrules[i]->dstip, strip6(pheaders->ip6h->ip6_dst_ip)) && !(readrules[i]->ignore & 16))
+                continue;
+            rulecount->ipv6++;
+            rulecount->icmp++;
+            ismatched = 1;
+            break;
+        }
+        if (ismatched)
+        {
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
+            print_eth();
+            print_ipv6();
+            print_icmp();
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
+        }
+        break;
+    case 32: // tcpv6
+        for (i = 0; i < count; i++)
+        {
+            if (strcmp(readrules[i]->ipver, "ipv6") && !(readrules[i]->ignore & 1))
+                continue;
+            if (strcmp(readrules[i]->ptc, "tcp") && !(readrules[i]->ignore & 2))
+                continue;
+            if (strcmp(readrules[i]->srcip, strip6(pheaders->ip6h->ip6_src_ip)) && !(readrules[i]->ignore & 4))
+                continue;
+            if ((atoi(readrules[i]->srcport) != e_ntohs(pheaders->tcph->tcp_src_port)) && !(readrules[i]->ignore & 8))
+                continue;
+            if (strcmp(readrules[i]->dstip, strip6(pheaders->ip6h->ip6_dst_ip)) && !(readrules[i]->ignore & 16))
+                continue;
+            if ((atoi(readrules[i]->dstport) != e_ntohs(pheaders->tcph->tcp_dst_port)) && !(readrules[i]->ignore & 32))
+                continue;
+            rulecount->ipv6++;
+            rulecount->tcp++;
+            ismatched = 1;
+            break;
+        }
+        if (ismatched)
+        {
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
+            print_eth();
+            print_ipv6();
+            print_tcp();
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
+        }
+        break;
+    case 64: // udpv6
+        for (i = 0; i < count; i++)
+        {
+            if (strcmp(readrules[i]->ipver, "ipv6") && !(readrules[i]->ignore & 1))
+                continue;
+            if (strcmp(readrules[i]->ptc, "udp") && !(readrules[i]->ignore & 2))
+                continue;
+            if (strcmp(readrules[i]->srcip, strip6(pheaders->ip6h->ip6_src_ip)) && !(readrules[i]->ignore & 4))
+                continue;
+            if ((atoi(readrules[i]->srcport) != e_ntohs(pheaders->udph->udp_src_port)) && !(readrules[i]->ignore & 8))
+                continue;
+            if (strcmp(readrules[i]->dstip, strip6(pheaders->ip6h->ip6_dst_ip)) && !(readrules[i]->ignore & 16))
+                continue;
+            if ((atoi(readrules[i]->dstport) != e_ntohs(pheaders->udph->udp_dst_port)) && !(readrules[i]->ignore & 32))
+                continue;
+            rulecount->ipv6++;
+            rulecount->udp++;
+            ismatched = 1;
+            break;
+        }
+        if (ismatched)
+        {
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
+            print_eth();
+            print_ipv6();
+            print_udp();
+            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
+        }
+        break;
+    }
+}
+
+void printmatchresult()
+{
+    fprintf(stdout, "\n*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
+    fprintf(stdout, "Packets: %20lld\n", packetcount->arp + packetcount->icmp + packetcount->ipv4 + packetcount->ipv6 + packetcount->tcp + packetcount->udp);
+    fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
+    fprintf(stdout, "Protocols:\n");
+    fprintf(stdout, "\tARP: %16lld\n", packetcount->arp);
+    fprintf(stdout, "\tIPv4: %15lld\n", packetcount->ipv4);
+    fprintf(stdout, "\tIPv6: %15lld\n", packetcount->ipv6);
+    fprintf(stdout, "\tICMP: %15lld\n", packetcount->icmp);
+    fprintf(stdout, "\tTCP: %16lld\n", packetcount->tcp);
+    fprintf(stdout, "\tUDP: %16lld\n", packetcount->udp);
+    fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
+    fprintf(stdout, "Protocol matched by Rules:\n");
+    fprintf(stdout, "\tARP: %16lld\n", rulecount->arp);
+    fprintf(stdout, "\tIPv4: %15lld\n", rulecount->ipv4);
+    fprintf(stdout, "\tIPv6: %15lld\n", rulecount->ipv6);
+    fprintf(stdout, "\tICMP: %15lld\n", rulecount->icmp);
+    fprintf(stdout, "\tTCP: %16lld\n", rulecount->tcp);
+    fprintf(stdout, "\tUDP: %16lld\n", rulecount->udp);
+    fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
+}
+
+void freerules()
+{
+    int i;
+    for (i = 0; i < count; i++)
+    {
+        free(readrules[i]->ipver);
+        free(readrules[i]->ptc);
+        free(readrules[i]->srcip);
+        free(readrules[i]->dstip);
+        free(readrules[i]->srcport);
+        free(readrules[i]->dstport);
+        free(readrules[i]);
+    }
+    free(readrules);
 }
 
 void print_eth(void)
@@ -186,375 +587,6 @@ void printmotd(const char *interface)
     fprintf(stdout, "C-NIDS Watcher opened interface: %s\n", interface);
     fprintf(stdout, "Ver: v1.0\n");
     fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
-}
-
-bit8_t analyze(const bit8_t *packet)
-{
-    bit8_t flags = 0;
-    pheaders->eth = (const eth_hdr *)packet;
-    if (e_ntohs(pheaders->eth->eth_type) == 0x0806)
-    {
-        pheaders->arph = (const arp_hdr *)(sizeof(eth_hdr) + packet);
-        flags |= 1;
-        packetcount->arp++;
-    }
-    else if (e_ntohs(pheaders->eth->eth_type) == 0x0800)
-    {
-        pheaders->ip4h = (const ip4_hdr *)(sizeof(eth_hdr) + packet);
-        packetcount->ipv4++;
-        if (pheaders->ip4h->ip4_protocol == 1)
-        {
-            pheaders->icmph = (const icmp_hdr *)(sizeof(eth_hdr) + (pheaders->ip4h->ip4_hdrlen * 4) + packet);
-            flags |= 2;
-            packetcount->icmp++;
-        }
-        else if (pheaders->ip4h->ip4_protocol == 6)
-        {
-            pheaders->tcph = (const tcp_hdr *)(sizeof(eth_hdr) + (pheaders->ip4h->ip4_hdrlen * 4) + packet);
-            flags |= 4;
-            packetcount->tcp++;
-        }
-        else if (pheaders->ip4h->ip4_protocol == 17)
-        {
-            pheaders->udph = (const udp_hdr *)(sizeof(eth_hdr) + (pheaders->ip4h->ip4_hdrlen * 4) + packet);
-            flags |= 8;
-            packetcount->udp++;
-        }
-    }
-    else if (e_ntohs(pheaders->eth->eth_type) == 0x86dd)
-    {
-        pheaders->ip6h = (const ip6_hdr *)(sizeof(eth_hdr) + packet);
-        packetcount->ipv6++;
-        if (pheaders->ip6h->ip6_next == 58)
-        {
-            pheaders->icmph = (const icmp_hdr *)(sizeof(eth_hdr) + sizeof(ip6_hdr) + packet);
-            flags |= 16;
-            packetcount->icmp++;
-        }
-        else if (pheaders->ip6h->ip6_next == 6)
-        {
-            pheaders->tcph = (const tcp_hdr *)(sizeof(eth_hdr) + sizeof(ip6_hdr) + packet);
-            flags |= 32;
-            packetcount->tcp++;
-        }
-        else if (pheaders->ip6h->ip6_next == 17)
-        {
-            pheaders->udph = (const udp_hdr *)(sizeof(eth_hdr) + sizeof(ip6_hdr) + packet);
-            flags |= 64;
-            packetcount->udp++;
-        }
-    }
-    return flags;
-}
-
-count_s *initcount_m()
-{
-    count_s *temp = malloc(sizeof(count_s));
-    temp->icmp = temp->ipv4 = temp->ipv6 = temp->tcp = temp->udp = 0;
-    return temp;
-}
-
-rule **readinirule_m(int fd) // 버그 없음
-{
-    rule **result;
-    int rulesize = lseek(fd, 0, SEEK_END);
-    char *rulestr = malloc(sizeof(char) * rulesize), *temp;
-
-    lseek(fd, 0, SEEK_SET);
-    read(fd, rulestr, rulesize);
-
-    temp = strtok(rulestr, " >\n");
-
-    if (strcmp(temp, "---") == 0)
-    {
-        fprintf(stderr, "Fatal error in strtok() : No rules\n");
-        exit(-1);
-    }
-    else
-        result = malloc(sizeof(rule *));
-
-    while (1)
-    {
-        result[count] = malloc(sizeof(rule));
-
-        result[count]->ipver = malloc(strlen(temp)); // ip 버전
-        strcpy(result[count]->ipver, temp);
-        temp = strtok(NULL, " >\n");
-
-        result[count]->ptc = malloc(strlen(temp)); // 프로토콜
-        strcpy(result[count]->ptc, temp);
-        temp = strtok(NULL, " >\n");
-
-        result[count]->srcip = malloc(strlen(temp)); // 출발지 ip
-        strcpy(result[count]->srcip, temp);
-        temp = strtok(NULL, " >\n");
-
-        result[count]->srcport = malloc(strlen(temp)); // 출발지 포트
-        strcpy(result[count]->srcport, temp);
-        temp = strtok(NULL, " >\n");
-
-        result[count]->dstip = malloc(strlen(temp)); // 도착지 ip
-        strcpy(result[count]->dstip, temp);
-        temp = strtok(NULL, " >\n");
-
-        result[count]->dstport = malloc(strlen(temp)); // 도착지 포트
-        strcpy(result[count]->dstport, temp);
-        temp = strtok(NULL, " >\n");
-
-        if (strcmp(temp, "---") == 0 || temp == NULL)
-            break;
-        else
-        {
-            count++;
-            result = realloc(result, sizeof(rule *) * (count + 1));
-        }
-    }
-
-    count++;
-    free(rulestr);
-    rulestr = NULL;
-
-    close(fd);
-    return result;
-}
-
-void pcapfatal(const char *inerr, const char *errbuf)
-{
-    fprintf(stderr, "Fatal error in %s : %s\n", inerr, errbuf);
-    exit(-1);
-}
-
-void callback_packet(bit8_t *args, const struct pcap_pkthdr *header, const bit8_t *packet)
-{
-    bit16_t flags = analyze(packet);
-    checkrule(flags);
-}
-
-void checkrule(bit8_t flags) //0BBB BBBB 예약 iph6udp iph6tcp iph6icmp ip4hudp ip4htcp ip4hicmp arp
-{
-    int i, ismatched = 0;
-    switch (flags)
-    {
-    case 1: // arp
-        for (i = 0; i < count; i++)
-        {
-            if (strcmp(readrules[i]->ptc, "arp") != 0)
-                continue;
-            if (strcmp(readrules[i]->srcip, strip4(pheaders->arph->arp_src_ip)) != 0)
-                continue;
-            if (strcmp(readrules[i]->dstip, strip4(pheaders->arph->arp_dst_ip)) != 0)
-                continue;
-            rulecount->arp++;
-            ismatched = 1;
-        }
-        if (ismatched)
-        {
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
-            print_eth();
-            print_arp();
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
-        }
-        break;
-    case 2:
-        for (i = 0; i < count; i++)
-        {
-            if (strcmp(readrules[i]->ipver, "ipv4") != 0)
-                continue;
-            if (strcmp(readrules[i]->ptc, "icmp") != 0)
-                continue;
-            if (strcmp(readrules[i]->srcip, strip4(pheaders->ip4h->ip4_src_ip)) != 0)
-                continue;
-            if (strcmp(readrules[i]->dstip, strip4(pheaders->ip4h->ip4_dst_ip)) != 0)
-                continue;
-            rulecount->ipv4++;
-            rulecount->icmp++;
-            ismatched = 1;
-        }
-        if (ismatched)
-        {
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
-            print_eth();
-            print_ipv4();
-            print_icmp();
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
-        }
-        break;
-    case 4:
-        for (i = 0; i < count; i++)
-        {
-            if (strcmp(readrules[i]->ipver, "ipv4") != 0)
-                continue;
-            if (strcmp(readrules[i]->ptc, "tcp") != 0)
-                continue;
-            if (strcmp(readrules[i]->srcip, strip4(pheaders->ip4h->ip4_src_ip)) != 0)
-                continue;
-            if (atoi(readrules[i]->srcport) != e_ntohs(pheaders->tcph->tcp_src_port))
-                continue;
-            if (strcmp(readrules[i]->dstip, strip4(pheaders->ip4h->ip4_dst_ip)) != 0)
-                continue;
-            if (atoi(readrules[i]->dstport) != e_ntohs(pheaders->tcph->tcp_dst_port))
-                continue;
-            rulecount->ipv4++;
-            rulecount->tcp++;
-            ismatched = 1;
-        }
-        if (ismatched)
-        {
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
-            print_eth();
-            print_ipv4();
-            print_tcp();
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
-        }
-        break;
-    case 8:
-        for (i = 0; i < count; i++)
-        {
-            if (strcmp(readrules[i]->ipver, "ipv4") != 0)
-                continue;
-            if (strcmp(readrules[i]->ptc, "udp") != 0)
-                continue;
-            if (strcmp(readrules[i]->srcip, strip4(pheaders->ip4h->ip4_src_ip)) != 0)
-                continue;
-            if (atoi(readrules[i]->srcport) != e_ntohs(pheaders->udph->udp_src_port))
-                continue;
-            if (strcmp(readrules[i]->dstip, strip4(pheaders->ip4h->ip4_dst_ip)) != 0)
-                continue;
-            if (atoi(readrules[i]->dstport) != e_ntohs(pheaders->udph->udp_dst_port))
-                continue;
-            rulecount->ipv4++;
-            rulecount->udp++;
-            ismatched = 1;
-        }
-        if (ismatched)
-        {
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
-            print_eth();
-            print_ipv4();
-            print_udp();
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
-        }
-        break;
-    case 16:
-        for (i = 0; i < count; i++)
-        {
-            if (strcmp(readrules[i]->ipver, "ipv6") != 0)
-                continue;
-            if (strcmp(readrules[i]->ptc, "icmp") != 0)
-                continue;
-            if (strcmp(readrules[i]->srcip, strip6(pheaders->ip6h->ip6_src_ip)) != 0)
-                continue;
-            if (strcmp(readrules[i]->dstip, strip6(pheaders->ip6h->ip6_dst_ip)) != 0)
-                continue;
-            rulecount->ipv6++;
-            rulecount->icmp++;
-            ismatched = 1;
-        }
-        if (ismatched)
-        {
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
-            print_eth();
-            print_ipv6();
-            print_icmp();
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
-        }
-        break;
-    case 32:
-        for (i = 0; i < count; i++)
-        {
-            if (strcmp(readrules[i]->ipver, "ipv6") != 0)
-                continue;
-            if (strcmp(readrules[i]->ptc, "tcp") != 0)
-                continue;
-            if (strcmp(readrules[i]->srcip, strip6(pheaders->ip6h->ip6_src_ip)) != 0)
-                continue;
-            if (atoi(readrules[i]->srcport) != e_ntohs(pheaders->tcph->tcp_src_port))
-                continue;
-            if (strcmp(readrules[i]->dstip, strip6(pheaders->ip6h->ip6_dst_ip)) != 0)
-                continue;
-            if (atoi(readrules[i]->dstport) != e_ntohs(pheaders->tcph->tcp_dst_port))
-                continue;
-            rulecount->ipv6++;
-            rulecount->tcp++;
-            ismatched = 1;
-        }
-        if (ismatched)
-        {
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
-            print_eth();
-            print_ipv6();
-            print_tcp();
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
-        }
-        break;
-    case 64:
-        for (i = 0; i < count; i++)
-        {
-            if (strcmp(readrules[i]->ipver, "ipv6") != 0)
-                continue;
-            if (strcmp(readrules[i]->ptc, "udp") != 0)
-                continue;
-            if (strcmp(readrules[i]->srcip, strip6(pheaders->ip6h->ip6_src_ip)) != 0)
-                continue;
-            if (atoi(readrules[i]->srcport) != e_ntohs(pheaders->udph->udp_src_port))
-                continue;
-            if (strcmp(readrules[i]->dstip, strip6(pheaders->ip6h->ip6_dst_ip)) != 0)
-                continue;
-            if (atoi(readrules[i]->dstport) != e_ntohs(pheaders->udph->udp_dst_port))
-                continue;
-            rulecount->ipv6++;
-            rulecount->udp++;
-            ismatched = 1;
-        }
-        if (ismatched)
-        {
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n"); // 20 바이트
-            print_eth();
-            print_ipv6();
-            print_udp();
-            fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
-        }
-        break;
-    }
-}
-
-void printmatchresult()
-{
-    fprintf(stdout, "\n*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
-    fprintf(stdout, "Packets: %20lld\n", packetcount->arp + packetcount->icmp + packetcount->ipv4 + packetcount->ipv6 + packetcount->tcp + packetcount->udp);
-    fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
-    fprintf(stdout, "Protocols:\n");
-    fprintf(stdout, "\tARP: %16lld\n", packetcount->arp);
-    fprintf(stdout, "\tIPv4: %15lld\n", packetcount->ipv4);
-    fprintf(stdout, "\tIPv6: %15lld\n", packetcount->ipv6);
-    fprintf(stdout, "\tICMP: %15lld\n", packetcount->icmp);
-    fprintf(stdout, "\tTCP: %16lld\n", packetcount->tcp);
-    fprintf(stdout, "\tUDP: %16lld\n", packetcount->udp);
-    fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
-    fprintf(stdout, "Protocol matched by Rules:\n");
-    fprintf(stdout, "\tARP: %16lld\n", rulecount->arp);
-    fprintf(stdout, "\tIPv4: %15lld\n", rulecount->ipv4);
-    fprintf(stdout, "\tIPv6: %15lld\n", rulecount->ipv6);
-    fprintf(stdout, "\tICMP: %15lld\n", rulecount->icmp);
-    fprintf(stdout, "\tTCP: %16lld\n", rulecount->tcp);
-    fprintf(stdout, "\tUDP: %16lld\n", rulecount->udp);
-    fprintf(stdout, "*-*-*-*-*-*-*-*-*-*-*-*-*-*-*\n");
-}
-
-void freerules()
-{
-    int i;
-    for (i = 0; i < count; i++)
-    {
-        free(readrules[i]->ipver);
-        free(readrules[i]->ptc);
-        free(readrules[i]->srcip);
-        free(readrules[i]->dstip);
-        free(readrules[i]->srcport);
-        free(readrules[i]->dstport);
-        free(readrules[i]);
-    }
-    free(readrules);
 }
 
 /*

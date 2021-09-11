@@ -21,6 +21,7 @@ typedef struct rule
     char *srcport;
     char *dstip;
     char *dstport;
+    bit8_t ignore;
 } rule;
 
 typedef struct counts

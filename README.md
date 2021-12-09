@@ -1,16 +1,22 @@
 # CNW_project
-
 The new linux C-language NIDS
 
-# Language
+# 언어
 <img src="https://img.shields.io/badge/c-%2300599C.svg?style=for-the-badge&logo=c&logoColor=white"/>
 
-# Required Libraries
+# 필요 라이브러리
 
 필요 라이브러리: libpcap
 컴파일: gcc -o CNW_IDS CNW_IDS.c packetElements.c -l pcap
 
-# Beta v1.1
+# 설명
+C언어로 개발한 네트워크 기반 칩입 탐지 시스템입니다.
+패킷을 받으면 패킷을 캡처하여 규칙파일 기반으로 검사 후 터미널에 출력 및 통계를 매깁니다.
+
+추후 라이브러리: libcurl 으로 이메일 전송을 구현하여 규칙파일에 규칙을 추가 및
+규칙에 맞으면 설정한 이메일로 전송하는 기능을 추가할 것입니다.
+
+# 베타 v1.1
 
 빌드: ./make.sh
 

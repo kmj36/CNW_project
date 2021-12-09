@@ -2,6 +2,9 @@
 
 The new linux C-language NIDS
 
+# Language
+<img src="https://img.shields.io/badge/c-%2300599C.svg?style=for-the-badge&logo=c&logoColor=white"/>
+
 # Required Libraries
 
 필요 라이브러리: libpcap

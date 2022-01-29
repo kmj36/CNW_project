@@ -1,4 +1,4 @@
-# CNW_project
+# C_NW_NIDS
 The new linux C-language NIDS
 
 # 언어
